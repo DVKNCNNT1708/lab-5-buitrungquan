@@ -1,274 +1,484 @@
-# FIT4110_lab05_docker_compose_readiness
+# Lab 05: FIT4110 Docker Compose Readiness
 
-**Học phần:** FIT4110 – Dịch vụ kết nối và Công nghệ nền tảng  
-**Buổi 5:** Điều phối đa dịch vụ với Docker Compose, readiness & AI service  
-**Case study:** Smart Campus Operations Platform  
-**Repo nền:** `FIT4110_lab04_docker_packaging`
+## Overview
 
-> Lab 04 đã chứng minh rằng một API chạy trên máy cá nhân có thể được đóng gói thành container và kiểm thử lại bằng Postman/Newman.  
-> Lab 05 mở rộng tư duy đó: thay vì một container đơn lẻ, chúng ta phải phối hợp **nhiều** dịch vụ thông qua Docker Compose. Đây là bước đệm trực tiếp để tham gia plug‑a‑thon – nơi mọi nhóm gắn kết dịch vụ của mình vào một hệ sinh thái chung.
+This is a comprehensive implementation of **Lab 05: Docker Compose Readiness** for FIT4110 course. The project demonstrates a production-ready IoT ingestion system using Docker Compose with three services:
+- **IoT API** (FastAPI) - Main API service for handling IoT readings
+- **AI Service** (FastAPI) - Mock AI prediction service
+- **PostgreSQL Database** - Data persistence layer
 
----
+All services are orchestrated using Docker Compose, connected via an internal network, with proper health checks and dependency management.
 
-## 1. Ý tưởng nối tiếp từ Lab 04 sang Lab 05
+## Features
 
-Trong Lab 04, luồng làm việc tập trung vào việc kiểm thử một service được đóng gói trong Docker:
+### ✅ Core Requirements Met
 
-```text
-OpenAPI Contract → Service → Dockerfile → Docker image → Docker container → Newman report
+1. **Docker Compose with 3 Services**
+   - API service on port 8000
+   - AI service on port 9000
+   - PostgreSQL 16 Alpine database on port 5432
+
+2. **Network & Storage**
+   - Custom `team-internal` bridge network for service communication
+   - Named volume `postgres_data` for database persistence
+
+3. **Health Checks**
+   - Database: `pg_isready` command
+   - AI Service: HTTP `/health` endpoint
+   - API Service: HTTP `/health` endpoint
+   - All configured with proper intervals, timeouts, and retries
+
+4. **API Endpoints**
+   - `GET /health` - Service health status (public)
+   - `POST /readings` - Create IoT reading (requires Bearer token)
+   - Both endpoints fully implemented and tested
+
+5. **AI Service Endpoints**
+   - `GET /health` - Service health
+   - `POST /predict` - Mock ML predictions with simple heuristics
+
+6. **Security**
+   - Non-root `appuser` in Dockerfile
+   - Bearer token authentication (lab05-secret-token)
+   - All sensitive config in `.env` file (not hardcoded)
+
+7. **Service Dependencies**
+   - API depends on both DB and AI service
+   - Uses `depends_on` with `condition: service_healthy`
+   - Ensures proper startup order
+
+8. **Documentation**
+   - [RUN_COMPOSE.md](RUN_COMPOSE.md) - Complete setup and testing guide
+   - [checklists/readiness-checklist.md](checklists/readiness-checklist.md) - Deployment verification checklist
+   - Makefile with convenient commands
+   - This README with comprehensive overview
+
+9. **Postman Testing**
+   - Collection: `postman/collections/FIT4110_lab05_iot_compose.postman_collection.json`
+   - Environment: `postman/environments/FIT4110_lab05_local.postman_environment.json`
+   - Tests for health checks and reading endpoints
+   - Authorization testing (valid token, missing token, invalid token)
+   - Automation ready with Newman
+
+## Project Structure
+
 ```
-
-Lab 05 mở rộng luồng đó thành:
-
-```text
-OpenAPI Contract
-→ Service thật (API)
-→ AI service (ví dụ YOLO v8 hoặc model mock)
-→ Database (PostgreSQL hoặc TimescaleDB)
-→ Docker Compose định nghĩa toàn bộ stack
-→ Nhiều container cùng chạy trên mạng nội bộ `team-internal`
-→ Service API gọi được AI và DB qua nội bộ
-→ Postman/Newman test lại stack end‑to‑end
-→ Evidence (report, log, screenshots)
-```
-
-Thông điệp chính của buổi học:
-
-> Một container đơn lẻ chưa đủ – các service thực tế luôn phải tương tác với cơ sở dữ liệu và/hoặc AI/ML.  
-> Docker Compose giúp định nghĩa mối quan hệ giữa chúng, nhưng mỗi service vẫn phải tuân thủ các nguyên tắc về readiness, health check và môi trường.
-
----
-
-## 2. Mục tiêu sau buổi lab
-
-Sau khi hoàn thành Lab 05, mỗi nhóm cần làm được:
-
-- Viết `docker-compose.yml` để định nghĩa ít nhất ba service: API, AI (hoặc worker) và database.
-- Dùng network `team-internal` để giao tiếp nội bộ và tham gia mạng chung `class-net` khi cần thiết.
-- Chạy API bằng non‑root user trong container và giữ nguyên `HEALTHCHECK` như Lab 04.
-- Thêm healthcheck cho DB (`pg_isready`) và AI service để Compose biết khi nào container sẵn sàng.
-- Tách cấu hình runtime qua `.env.example` (ví dụ `APP_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `SERVICE_VERSION`, `AUTH_TOKEN`).
-- Không commit secret thật vào repo.
-- Triển khai `Makefile` hoặc script để nhanh chóng chạy Compose (`make compose-up`, `make compose-down`).
-- Viết `RUN_COMPOSE.md` hướng dẫn người khác clone và chạy lại toàn bộ stack.
-- Chạy lại Postman/Newman để kiểm thử API trong môi trường Compose (có thể tái sử dụng collection và environment của Lab 04).
-- Soạn **checklists/readiness-checklist.md** mô tả checklist readiness 6 điểm (sẵn sàng DB, AI, token, port, network, version) và tick khi hoàn thành.
-- Cung cấp bằng chứng (screenshot/ảnh, báo cáo test) trong thư mục `reports/`.
-
----
-
-## 3. Cấu trúc repo
-
-```text
-FIT4110_lab05_docker_compose_readiness/
-├── README.md
-├── RUN_COMPOSE.md
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
-├── .env.example
-├── Makefile
-├── requirements.txt
+lab-5-buitrungquan/
+├── README.md                                          # This file
+├── RUN_COMPOSE.md                                     # Setup and execution guide
+├── Dockerfile                                         # Multi-stage Python image
+├── docker-compose.yml                                 # 3-service orchestration
+├── .dockerignore                                      # Docker build ignores
+├── .env.example                                       # Environment template
+├── Makefile                                           # Build & run commands
+├── requirements.txt                                   # Python dependencies
+│
 ├── src/
 │   ├── iot_app/
 │   │   ├── __init__.py
-│   │   └── main.py
+│   │   └── main.py                                   # FastAPI IoT service
 │   └── ai_service/
-│       └── main.py
+│       ├── __init__.py
+│       └── main.py                                   # FastAPI AI mock service
+│
 ├── contracts/
-│   └── iot-ingestion.openapi.yaml
+│   └── iot-ingestion.openapi.yaml                    # OpenAPI specification
+│
 ├── postman/
+│   ├── collections/
+│   │   └── FIT4110_lab05_iot_compose.postman_collection.json
 │   └── environments/
 │       └── FIT4110_lab05_local.postman_environment.json
+│
 ├── checklists/
-│   └── readiness-checklist.md
-└── reports/
+│   └── readiness-checklist.md                        # 6-point verification checklist
+│
+└── reports/                                           # Newman test reports
 ```
 
-Thư mục `src/iot_app` chứa API FastAPI giống Lab 04. Thư mục `src/ai_service` chứa service AI mẫu (giả lập), cung cấp một endpoint `/predict` trả về kết quả dummy. Nhóm có thể thay bằng mô hình thực tế (YOLOv8, MediaPipe…).
+## Quick Start
 
----
+### Prerequisites
+- Docker & Docker Compose
+- Git (for cloning)
+- curl (for manual testing)
+- Optional: Postman or Newman for advanced testing
 
-## 4. Chuẩn bị môi trường
-
-Trước khi chạy compose, hãy cài:
-
-- **Git** để clone repo.
-- **Docker Desktop** hoặc Docker Engine hỗ trợ Compose v2.
-- **Node.js 20.x LTS** và `npm` nếu muốn chạy Newman/Prism/Spectral.
-- **Postman Desktop** hoặc Postman Web.
-
-Sau khi clone, cài dependencies phục vụ Prism, Spectral và Newman (tùy chọn):
+### Setup
 
 ```bash
-npm install
+# 1. Clone and enter directory
+git clone <repo-url>
+cd lab-5-buitrungquan
+
+# 2. Create environment file
+cp .env.example .env
+
+# 3. Start all services
+docker compose up -d --build
+
+# 4. Verify all services are healthy
+docker compose ps                    # Check containers
+curl http://localhost:8000/health    # API health
+curl http://localhost:9000/health    # AI health
 ```
 
-Kiểm tra phiên bản:
+### Testing
 
 ```bash
-docker compose version
-docker --version
-node --version
-npx newman --version
-npx prism --version
+# Option 1: Manual testing with curl
+curl -X POST http://localhost:8000/readings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer lab05-secret-token" \
+  -d '{
+    "device_id": "device-001",
+    "metric": "temperature",
+    "value": 25.5,
+    "unit": "celsius"
+  }'
+
+# Option 2: Use Makefile
+make test-compose              # Run Postman tests via Newman
+
+# Option 3: Use Postman GUI
+# Import environment and collection, then run
 ```
 
----
-
-## 5. Chạy API local không dùng Docker
-
-Các bước giống Lab 04:
+### Cleanup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn iot_app.main:app --app-dir src --host 0.0.0.0 --port 8000
+make clean                     # Stop and remove everything
 ```
 
-Kiểm tra health:
+## API Documentation
+
+### Service: iot-service (Port 8000)
+
+#### GET /health
+Health check endpoint - no authentication required.
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "service": "iot-service",
+  "version": "1.0.0"
+}
+```
+
+#### POST /readings
+Create a new IoT reading. **Requires Bearer token.**
+
+**Authentication:**
+```
+Authorization: Bearer lab05-secret-token
+```
+
+**Request Body:**
+```json
+{
+  "device_id": "device-001",
+  "metric": "temperature",
+  "value": 25.5,
+  "unit": "celsius"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "reading_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "success",
+  "ai_result": {
+    "label": "normal",
+    "confidence": 0.98
+  }
+}
+```
+
+**Auth Error (401 Unauthorized):**
+- Missing token: `{"detail": "Missing authorization token"}`
+- Invalid token: `{"detail": "Invalid token"}`
+- Malformed header: `{"detail": "Invalid authorization header"}`
+
+### Service: ai-service (Port 9000)
+
+#### GET /health
+AI service health check.
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "service": "ai-service",
+  "model": "mock-v1"
+}
+```
+
+#### POST /predict
+Make a prediction on sensor data (called internally by API).
+
+**Request Body:**
+```json
+{
+  "device_id": "device-001",
+  "metric": "temperature",
+  "value": 25.5,
+  "unit": "celsius",
+  "timestamp": "2026-06-09T12:00:00"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "label": "normal",
+  "confidence": 0.98
+}
+```
+
+**Prediction Logic:**
+- `value > 100`: anomaly (confidence 0.95)
+- `50 < value <= 100`: warning (confidence 0.75)
+- `value <= 50`: normal (confidence 0.98)
+
+## Configuration
+
+### Environment Variables (.env)
+
+```env
+# PostgreSQL
+POSTGRES_USER=iotuser
+POSTGRES_PASSWORD=iotpassword
+POSTGRES_DB=iotdb
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+
+# API
+API_HOST=0.0.0.0
+API_PORT=8000
+API_SECRET_TOKEN=lab05-secret-token
+AI_SERVICE_URL=http://ai-service:9000
+
+# AI Service
+AI_SERVICE_HOST=0.0.0.0
+AI_SERVICE_PORT=9000
+
+# Environment
+ENVIRONMENT=docker
+DEBUG=False
+```
+
+**Security Note:** Change `POSTGRES_PASSWORD` and `API_SECRET_TOKEN` in production. Never commit `.env` to version control.
+
+## Docker Compose Details
+
+### Services
+
+**db** (PostgreSQL 16 Alpine)
+- Port: 5432
+- Volume: postgres_data
+- Health Check: pg_isready
+- Restart: unless-stopped
+
+**ai-service** (FastAPI)
+- Port: 9000
+- Health Check: HTTP GET /health
+- Depends on: db
+- Restart: unless-stopped
+
+**api** (FastAPI)
+- Port: 8000
+- Health Check: HTTP GET /health
+- Depends on: db (healthy), ai-service (healthy)
+- Restart: unless-stopped
+
+### Network
+- Name: team-internal
+- Type: bridge
+- Services communicate via DNS:
+  - API → AI Service: `http://ai-service:9000`
+  - API → Database: `db:5432`
+
+### Volumes
+- postgres_data: Local driver, stores PostgreSQL data
+
+## Makefile Commands
 
 ```bash
+make help          # Show all commands
+make compose-up    # Build and start services
+make compose-down  # Stop and remove services
+make logs          # View logs from all services
+make ps            # Show running containers
+make test-compose  # Run Postman tests via Newman
+make clean         # Complete cleanup (remove volumes)
+```
+
+## Testing & Verification
+
+### Health Checks
+
+```bash
+# API Health
 curl http://localhost:8000/health
+
+# AI Service Health
+curl http://localhost:9000/health
+
+# Database Health
+docker compose exec db pg_isready -U iotuser -d iotdb
 ```
 
----
-
-## 6. Điều phối đa dịch vụ với Docker Compose
-
-File `docker-compose.yml` định nghĩa 3 service: `api`, `db` và `ai-service`. Các biến môi trường được đặt trong `.env.example` và các volume/network được khai báo rõ ràng.
-
-Chạy compose (build & run):
+### Authentication Tests
 
 ```bash
+# Missing token (should fail)
+curl -X POST http://localhost:8000/readings \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"test","metric":"temp","value":25.5}'
+
+# Invalid token (should fail)
+curl -X POST http://localhost:8000/readings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer wrong-token" \
+  -d '{"device_id":"test","metric":"temp","value":25.5}'
+
+# Valid token (should succeed)
+curl -X POST http://localhost:8000/readings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer lab05-secret-token" \
+  -d '{"device_id":"test","metric":"temp","value":25.5}'
+```
+
+### Postman Tests
+
+```bash
+# Run Newman tests (requires docker)
+make test-compose
+
+# Reports generated in reports/ directory:
+# - newman-report.html
+# - newman-report.json
+```
+
+See [RUN_COMPOSE.md](RUN_COMPOSE.md) for detailed testing instructions.
+
+## Readiness Checklist
+
+Before considering the system production-ready, verify all 6 checkpoint categories:
+
+1. ✅ **Database Ready** - PostgreSQL running with health checks
+2. ✅ **AI Service Ready** - /health and /predict endpoints working
+3. ✅ **API Service Ready** - /health and /readings endpoints working
+4. ✅ **Authorization Token Validation** - Auth tests passing
+5. ✅ **Port Configuration** - All ports accessible without conflicts
+6. ✅ **Internal Network Configuration** - Services communicating via team-internal network
+
+See [checklists/readiness-checklist.md](checklists/readiness-checklist.md) for complete verification procedures.
+
+## Troubleshooting
+
+### Services Won't Start
+
+```bash
+# Check logs
+docker compose logs -f
+
+# Rebuild without cache
+docker compose up -d --build --no-cache
+
+# Full reset
+docker compose down -v
+docker system prune -a
 docker compose up -d --build
 ```
 
-Compose sẽ kéo hoặc build image, tạo mạng `team-internal`, gắn volume DB và khởi động lần lượt `db` → `ai-service` → `api`. Bạn có thể theo dõi log:
+### Port Conflicts
 
 ```bash
-docker compose logs -f
+# Find what's using the port
+lsof -i :8000
+lsof -i :9000
+lsof -i :5432
+
+# Kill the process if needed
+kill -9 <PID>
 ```
 
-Kiểm tra readiness của từng service:
-
-- API: `curl http://localhost:8000/health`
-- DB: `docker exec -it fit4110-db-lab05 pg_isready -U $POSTGRES_USER`
-- AI: `curl http://localhost:9000/health` (service mẫu trả về JSON đơn giản)
-
-Sau khi stack đã sẵn sàng, chạy lại Postman collection giống Lab 04 (sửa `baseUrl` thành `http://localhost:8000`).
-
-Dừng toàn bộ stack:
+### Database Connection Issues
 
 ```bash
-docker compose down
+# Check database health
+docker compose exec db pg_isready -U iotuser -d iotdb
+
+# Connect to database
+docker compose exec db psql -U iotuser -d iotdb
 ```
 
----
-
-## 7. Readiness checklist
-
-Phần này ghi lại checklist readiness cần kiểm tra trước khi tuyên bố stack sẵn sàng. Xem file [`checklists/readiness-checklist.md`](checklists/readiness-checklist.md) để biết chi tiết và tick vào các mục như:
-
-- DB đã khởi động và sẵn sàng (`pg_isready`).
-- AI service đã tải mô hình (nếu có) và có health check trả 200.
-- API có thể kết nối DB và AI (ví dụ tạo một reading thành công).
-- Các biến môi trường (.env) được đặt đúng, không dùng secret thật.
-- `team-internal` network hoạt động; service có thể gọi nội bộ qua tên container.
-- Version/tag của từng image được cập nhật đúng quy ước (vd: `v0.1.0-team-iot`).
-
----
-
-## 8. Các lệnh nhanh bằng Makefile
-
-Makefile cung cấp các lệnh tiện lợi:
+### AI Service Unreachable
 
 ```bash
-make compose-up      # build và chạy compose stack
-make compose-down    # stop và remove stack
-make logs            # theo dõi log của các service
-make test-compose    # chạy newman test trên compose (tùy chọn)
+# Check if running
+docker compose ps ai-service
+
+# Test from API container
+docker compose exec api curl http://ai-service:9000/health
 ```
 
-Bạn có thể mở Makefile để chỉnh sửa thêm các mục.
+## Lab 04 Compatibility
+
+This Lab 05 implementation is built on top of Lab 04 FastAPI foundations:
+- Reuses core API logic and patterns
+- Maintains compatibility with existing data models
+- Extends with Docker Compose orchestration
+- Adds AI service integration
+
+## Production Considerations
+
+⚠️ **Important Security Notes:**
+
+1. Change default credentials in `.env`
+2. Use environment-specific configurations
+3. Implement proper authentication (OAuth2, JWT)
+4. Use secrets management (Docker Secrets, HashiCorp Vault)
+5. Set up logging and monitoring
+6. Configure resource limits
+7. Use health checks in production
+
+## Dependencies
+
+### Python Packages
+- fastapi==0.104.1
+- uvicorn[standard]==0.24.0
+- pydantic==2.5.0
+- requests==2.31.0
+- psycopg2-binary==2.9.9
+- python-dotenv==1.0.0
+
+### System
+- Docker
+- Docker Compose
+- PostgreSQL 16 (Alpine)
+- Python 3.12
+
+## License
+
+Lab project for FIT4110 course.
+
+## Support
+
+For detailed instructions on:
+- **Setup & Execution**: See [RUN_COMPOSE.md](RUN_COMPOSE.md)
+- **Verification**: See [checklists/readiness-checklist.md](checklists/readiness-checklist.md)
+- **API Details**: See [contracts/iot-ingestion.openapi.yaml](contracts/iot-ingestion.openapi.yaml)
+
+## Authors
+
+FIT4110 - Smart Campus IoT Lab
 
 ---
 
-## 9. Bài làm của từng nhóm
+**Status**: ✅ Complete Lab 05 Implementation
 
-Mỗi nhóm dùng repo này làm mẫu và thay thế service trong `src/` bằng service của mình.
-
-| Nhóm         | Cần thay đổi |
-|--------------|-------------|
-| `team-iot`   | Có thể sử dụng API IoT mẫu, thêm DB TimescaleDB nếu muốn. |
-| `team-camera`| Thay `src/ai_service` bằng service Camera Stream & AI inference, cập nhật port và health. |
-| `team-gate`  | Kết nối API với Access Gate service, lưu ý biến môi trường DB cho cổng, bỏ AI nếu không cần. |
-| `team-vision`| Thay `ai_service` bằng mô hình YOLOv8/MediaPipe; đảm bảo container đủ dependency CUDA khi cần. |
-| `team-analytics`| Thay DB bằng TimescaleDB, service analytics sẽ đọc dữ liệu và trả về thống kê. |
-| `team-core`  | Thay API thành policy engine; có thể bỏ AI/DB nếu không dùng. |
-| `team-notify`| Thay API thành Notification service, thêm RabbitMQ hoặc gửi email/SMS; không commit token thật. |
-
----
-
-## 10. Điều kiện hoàn thành Lab 05
-
-Một nhóm được xem là hoàn thành Lab 05 khi:
-
-- `docker-compose.yml` khởi tạo ít nhất 3 container và khai báo đúng network/volume.
-- Mỗi service có `HEALTHCHECK` và container được chạy bằng user non‑root (nếu tự build).
-- `.dockerignore`, `.env.example`, `RUN_COMPOSE.md` đầy đủ, không rò rỉ secret.
-- `db` và `ai-service` sẵn sàng trước khi API start (Compose `depends_on` và health check). 
-- Postman/Newman test pass trên API khi chạy trong stack Compose.
-- Có report trong `reports/` (XML/HTML) và evidence log/ảnh chụp health.
-- Version/tag của image tuân theo quy ước `v0.1.0-<team>`, push lên registry (ghcr.io hoặc Docker Hub).
-
----
-
-## 11. Artefact cần nộp
-
-```text
-docker-compose.yml
-.dockerignore
-.env.example
-RUN_COMPOSE.md
-contracts/<team>.openapi.yaml
-postman/environments/<team>_local.postman_environment.json
-reports/newman-lab05-compose.xml
-reports/newman-lab05-compose.html
-ảnh chụp /health hoặc log container
-tag image đã push lên registry
-checklists/readiness-checklist.md (đã tick các mục)
-```
-
----
-
-## 12. Rubric gợi ý
-
-| Tiêu chí                                              | Điểm |
-|-------------------------------------------------------|-----:|
-| `docker-compose.yml` đúng, build & run được           | 2.0 |
-| Các container sẵn sàng, `/health` và DB/AI pass        | 2.0 |
-| Non‑root, `.dockerignore`, `.env.example` tốt         | 1.5 |
-| Newman/Postman test pass trên stack Compose           | 2.0 |
-| `RUN_COMPOSE.md` rõ ràng, người khác chạy lại được    | 1.5 |
-| Evidence đầy đủ: log/report/image tag & checklist     | 1.0 |
-| **Tổng**                                             | **10.0** |
-
----
-
-## 13. Tinh thần của buổi học
-
-Sau Buổi 4, nhóm đã chứng minh:
-
-```text
-API có thể chạy trong container và được kiểm thử tự động.
-```
-
-Sau Buổi 5, nhóm cần chứng minh thêm:
-
-```text
-Hệ thống nhiều service có thể phối hợp trơn tru thông qua Docker Compose, với readiness rõ ràng và kiểm thử end‑to‑end.
-```
-
-Điều này là tiền đề để chuẩn bị cho plug‑a‑thon, nơi các nhóm sẽ “cắm vào” hệ sinh thái chung của lớp và vận hành nhiều service cùng lúc.
+Last Updated: June 2026

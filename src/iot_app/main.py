@@ -1,267 +1,167 @@
+"""
+FastAPI IoT Ingestion Service
+Lab 05: Docker Compose Readiness
+"""
+import uuid
 import os
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Dict, List, Optional
+import requests
+from datetime import datetime
+from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
+import logging
 
-# Đọc biến môi trường với giá trị mặc định
-SERVICE_NAME = os.getenv("SERVICE_NAME", "iot-ingestion")
-SERVICE_VERSION = os.getenv("SERVICE_VERSION", "0.5.0")
-AUTH_TOKEN = os.getenv("AUTH_TOKEN", "local-dev-token")
-
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="FIT4110 Lab 05 - IoT Ingestion Service",
-    version=SERVICE_VERSION,
-    description=(
-        "IoT Ingestion API chạy trong ngữ cảnh Docker Compose cho Lab 05. "
-        "Luồng logic được kế thừa từ Lab 04 và tiếp tục được dùng để kiểm thử end‑to‑end."
-    ),
+    title="IoT Ingestion Service",
+    description="Lab 05: Docker Compose Readiness",
+    version="1.0.0"
 )
 
+# Configuration
+SERVICE_NAME = "iot-service"
+SERVICE_VERSION = "1.0.0"
+API_SECRET_TOKEN = os.getenv("API_SECRET_TOKEN", "lab05-secret-token")
+AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai-service:9000")
 
-class SensorMetric(str, Enum):
-    temperature = "temperature"
-    humidity = "humidity"
-    motion = "motion"
-    smoke = "smoke"
-
-
-class SensorUnit(str, Enum):
-    celsius = "celsius"
-    percent = "percent"
-    boolean = "boolean"
-    ppm = "ppm"
-
-
-class ProblemDetails(BaseModel):
-    type: str = "about:blank"
-    title: str
-    status: int = Field(..., ge=400, le=599)
-    detail: str
-    instance: Optional[str] = None
-
-
+# Models
 class HealthResponse(BaseModel):
     status: str
     service: str
     version: str
 
 
-class SensorReadingCreate(BaseModel):
-    device_id: str = Field(..., min_length=3, examples=["ESP32-LAB-A01"])
-    metric: SensorMetric = Field(..., examples=["temperature"])
-    value: float = Field(
-        ...,
-        ge=-40,
-        le=80,
-        description="Boundary range used in Lab 03 và Lab 04: -40 đến 80.",
-        examples=[31.5],
-    )
-    unit: Optional[SensorUnit] = Field(default=None, examples=["celsius"])
-    timestamp: str = Field(..., examples=["2026-05-13T08:30:00+07:00"])
+class ReadingRequest(BaseModel):
+    device_id: str = Field(..., description="Device identifier")
+    metric: str = Field(..., description="Metric name")
+    value: float = Field(..., description="Metric value")
+    unit: str = Field(default="", description="Unit of measurement")
 
 
-class SensorReading(BaseModel):
+class ReadingResponse(BaseModel):
     reading_id: str
-    device_id: str
-    metric: SensorMetric
-    value: float
-    unit: Optional[SensorUnit] = None
-    timestamp: str
-    created_at: str
+    status: str
+    ai_result: Optional[dict] = None
 
 
-class SensorReadingCreated(BaseModel):
-    reading_id: str
-    device_id: str
-    metric: SensorMetric
-    accepted: bool
-    created_at: str
-
-
-READINGS: List[Dict] = []
-
-
-def build_problem(
-    *,
-    status_code: int,
-    title: str,
-    detail: str,
-    instance: Optional[str] = None,
-    problem_type: str = "about:blank",
-) -> Dict:
-    problem = {
-        "type": problem_type,
-        "title": title,
-        "status": status_code,
-        "detail": detail,
-    }
-    if instance:
-        problem["instance"] = instance
-    return problem
-
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    if isinstance(exc.detail, dict):
-        problem = exc.detail
-    else:
-        problem = build_problem(
-            status_code=exc.status_code,
-            title=status.HTTP_STATUS_CODES.get(exc.status_code, "HTTP Error"),
-            detail=str(exc.detail),
-            instance=str(request.url.path),
-        )
-
-    problem.setdefault("status", exc.status_code)
-    problem.setdefault("title", status.HTTP_STATUS_CODES.get(exc.status_code, "HTTP Error"))
-    problem.setdefault("type", "about:blank")
-    problem.setdefault("detail", "Request failed")
-    problem.setdefault("instance", str(request.url.path))
-
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=problem,
-        media_type="application/problem+json",
-        headers=getattr(exc, "headers", None),
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
-    first_error = exc.errors()[0] if exc.errors() else {}
-    location = ".".join(str(item) for item in first_error.get("loc", []))
-    message = first_error.get("msg", "Request validation error")
-    detail = f"{location}: {message}" if location else message
-
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content=build_problem(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            title="Validation error",
-            detail=detail,
-            instance=str(request.url.path),
-            problem_type="https://smart-campus.local/problems/validation-error",
-        ),
-        media_type="application/problem+json",
-    )
-
-
-def verify_bearer_token(authorization: Optional[str] = Header(default=None)) -> None:
+# Helper function to verify token
+def verify_token(authorization: Optional[str] = Header(None)) -> str:
+    """Verify Bearer token from Authorization header"""
     if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=build_problem(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                title="Unauthorized",
-                detail="Missing Authorization header",
-                problem_type="https://smart-campus.local/problems/unauthorized",
-            ),
-        )
-
-    expected = f"Bearer {AUTH_TOKEN}"
-    if authorization != expected:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=build_problem(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                title="Unauthorized",
-                detail="Invalid bearer token",
-                problem_type="https://smart-campus.local/problems/unauthorized",
-            ),
-        )
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+    
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    
+    token = parts[1]
+    if token != API_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    return token
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def next_reading_id() -> str:
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
-    return f"R-{today}-{len(READINGS) + 1:04d}"
-
-
-@app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+# Endpoints
+@app.get("/health", response_model=HealthResponse, tags=["Health"])
+async def health_check() -> HealthResponse:
+    """
+    Health check endpoint
+    Returns service status, name, and version
+    """
     return HealthResponse(
         status="ok",
         service=SERVICE_NAME,
-        version=SERVICE_VERSION,
+        version=SERVICE_VERSION
     )
 
 
-@app.post(
-    "/readings",
-    response_model=SensorReadingCreated,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(verify_bearer_token)],
-    responses={
-        401: {"model": ProblemDetails},
-        422: {"model": ProblemDetails},
-        429: {"model": ProblemDetails},
-    },
-)
-def create_reading(payload: SensorReadingCreate, response: Response) -> SensorReadingCreated:
-    # Ví dụ logic cảnh báo: nếu nhiệt độ >= 70 thì thêm header cảnh báo
-    if payload.metric == SensorMetric.temperature and payload.value >= 70:
-        response.headers["X-Warning"] = "high-temperature"
+@app.post("/readings", response_model=ReadingResponse, tags=["Readings"])
+async def create_reading(
+    reading: ReadingRequest,
+    token: str = Depends(verify_token)
+) -> ReadingResponse:
+    """
+    Create a new reading from IoT device
+    Requires Bearer token in Authorization header
+    
+    Steps:
+    1. Validate reading request
+    2. Call AI service /predict endpoint
+    3. Return reading_id, status, and AI result
+    """
+    try:
+        # Generate reading ID
+        reading_id = str(uuid.uuid4())
+        
+        logger.info(f"Processing reading: device={reading.device_id}, metric={reading.metric}, value={reading.value}")
+        
+        # Call AI service for prediction
+        ai_payload = {
+            "device_id": reading.device_id,
+            "metric": reading.metric,
+            "value": reading.value,
+            "unit": reading.unit,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        logger.info(f"Calling AI service at {AI_SERVICE_URL}/predict")
+        response = requests.post(
+            f"{AI_SERVICE_URL}/predict",
+            json=ai_payload,
+            timeout=5
+        )
+        
+        if response.status_code != 200:
+            logger.warning(f"AI service returned {response.status_code}: {response.text}")
+            ai_result = {"label": "unknown", "confidence": 0.0}
+        else:
+            ai_result = response.json()
+        
+        logger.info(f"AI prediction result: {ai_result}")
+        
+        return ReadingResponse(
+            reading_id=reading_id,
+            status="success",
+            ai_result=ai_result
+        )
+    
+    except requests.RequestException as e:
+        logger.error(f"Error calling AI service: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail="AI service unavailable"
+        )
+    except Exception as e:
+        logger.error(f"Error processing reading: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
 
-    reading_id = next_reading_id()
-    created_at = now_iso()
 
-    item = {
-        "reading_id": reading_id,
-        "device_id": payload.device_id,
-        "metric": payload.metric.value,
-        "value": payload.value,
-        "unit": payload.unit.value if payload.unit else None,
-        "timestamp": payload.timestamp,
-        "created_at": created_at,
+@app.get("/", tags=["Root"])
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "IoT Ingestion Service Lab 05",
+        "service": SERVICE_NAME,
+        "version": SERVICE_VERSION,
+        "endpoints": [
+            "GET /health",
+            "POST /readings (requires Bearer token)"
+        ]
     }
-    READINGS.append(item)
-
-    return SensorReadingCreated(
-        reading_id=reading_id,
-        device_id=payload.device_id,
-        metric=payload.metric,
-        accepted=True,
-        created_at=created_at,
-    )
 
 
-@app.get("/readings/latest", dependencies=[Depends(verify_bearer_token)])
-def latest_readings(
-    device_id: Optional[str] = Query(default=None),
-    limit: int = Query(default=10, ge=1, le=100),
-) -> Dict[str, List[Dict]]:
-    items = READINGS
-
-    if device_id:
-        items = [item for item in items if item["device_id"] == device_id]
-
-    return {"items": items[-limit:]}
-
-
-@app.get("/readings/{reading_id}", dependencies=[Depends(verify_bearer_token)])
-def get_reading(reading_id: str) -> Dict:
-    for item in READINGS:
-        if item["reading_id"] == reading_id:
-            return item
-
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=build_problem(
-            status_code=status.HTTP_404_NOT_FOUND,
-            title="Not Found",
-            detail=f"Reading {reading_id} does not exist",
-            instance=f"/readings/{reading_id}",
-            problem_type="https://smart-campus.local/problems/not-found",
-        ),
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info"
     )

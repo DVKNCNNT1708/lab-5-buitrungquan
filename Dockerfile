@@ -1,54 +1,34 @@
-# syntax=docker/dockerfile:1.7
+# Stage 1: Base Python image
+FROM python:3.12-slim
 
-FROM python:3.11-slim AS builder
-
-# Không ghi bytecode và hiển thị stdout ngay lập tức
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-WORKDIR /build
-
-# Tạo virtualenv riêng để giảm layer image
-RUN python -m venv /opt/venv
-
-COPY requirements.txt .
-
-RUN /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
-
-
-FROM python:3.11-slim AS runtime
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Biến runtime mặc định – có thể override qua .env
-ENV APP_HOST=0.0.0.0
-ENV APP_PORT=8000
-ENV AUTH_TOKEN=local-dev-token
-ENV SERVICE_NAME=iot-ingestion
-ENV SERVICE_VERSION=0.5.0
-
+# Set working directory
 WORKDIR /app
 
-# Tạo user non‑root để chạy app an toàn
-RUN addgroup --system appgroup \
-    && adduser --system --ingroup appgroup --home /app appuser
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-COPY --from=builder /opt/venv /opt/venv
-COPY src/ ./src/
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    postgresql-client \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Cấp quyền cho user
-RUN chown -R appuser:appgroup /app
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy application source code
+COPY src /app/src
+
+# Change ownership to appuser
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
 USER appuser
 
-EXPOSE 8000
+# Expose ports
+EXPOSE 8000 9000
 
-# Healthcheck sử dụng endpoint /health của API
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" || exit 1
-
-# Chạy API bằng uvicorn
-CMD ["sh", "-c", "uvicorn iot_app.main:app --app-dir src --host ${APP_HOST} --port ${APP_PORT}"]
+# Default command (can be overridden by docker-compose)
+CMD ["python", "-m", "uvicorn", "src.iot_app.main:app", "--host", "0.0.0.0", "--port", "8000"]

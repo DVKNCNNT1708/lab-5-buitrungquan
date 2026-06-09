@@ -1,114 +1,273 @@
-# RUN_COMPOSE.md – Hướng dẫn chạy Lab 05
+# Lab 05: Docker Compose Readiness - Run Guide
 
-Tài liệu này hướng dẫn người khác clone repo sạch và chạy lại stack Compose của Lab 05.
+## Overview
+This lab demonstrates a complete Docker Compose setup for an IoT ingestion system with API, AI service, and PostgreSQL database.
 
----
+## Prerequisites
+- Docker and Docker Compose installed
+- Git
+- cURL (for testing)
+- Optional: Postman/Newman for API testing
 
-## 1. Clone repo
+## Quick Start
 
+### 1. Clone Repository
 ```bash
-git clone <repo-url>
-cd FIT4110_lab05_docker_compose_readiness
+git clone <repository-url>
+cd lab-5-buitrungquan
 ```
 
----
-
-## 2. Cài dependencies cho Newman/Prism/Spectral (tuỳ chọn)
-
+### 2. Create Environment File
 ```bash
-npm install
-```
-
----
-
-## 3. Build & chạy stack Docker Compose
-
-```bash
-# Copy .env.example sang .env và chỉnh sửa nếu cần
 cp .env.example .env
+```
 
-# Build images (nếu chưa có) và khởi động các container trong nền
+### 3. Build and Start Services
+```bash
 docker compose up -d --build
 ```
 
-Lệnh trên sẽ tạo các container:
-
-- `fit4110-db-lab05` (PostgreSQL)
-- `fit4110-ai-lab05` (AI service mẫu chạy port 9000)
-- `fit4110-api-lab05` (API FastAPI trên port 8000)
-
-Theo dõi log:
-
+### 4. Verify Services are Running
 ```bash
-docker compose logs -f
+docker compose ps
 ```
 
-Sau vài giây, kiểm tra health của mỗi service:
+Expected output should show 3 containers:
+- `iot-db` (postgres:16-alpine)
+- `iot-ai-service` (FastAPI)
+- `iot-api` (FastAPI)
 
+### 5. Check Health Endpoints
+
+#### API Health
 ```bash
-# API
 curl http://localhost:8000/health
+```
 
-# AI service
+Expected response:
+```json
+{
+  "status": "ok",
+  "service": "iot-service",
+  "version": "1.0.0"
+}
+```
+
+#### AI Service Health
+```bash
 curl http://localhost:9000/health
-
-# DB readiness
-docker exec -it fit4110-db-lab05 pg_isready -U $POSTGRES_USER
 ```
 
-Bạn cũng có thể truy cập endpoint `/predict` của AI service để xem kết quả mẫu:
+Expected response:
+```json
+{
+  "status": "ok",
+  "service": "ai-service",
+  "model": "mock-v1"
+}
+```
+
+#### Database Health
+```bash
+docker compose exec db pg_isready -U iotuser -d iotdb
+```
+
+Expected output: `accepting connections`
+
+### 6. Test API Endpoints
+
+#### Test Health Check (No Auth Required)
+```bash
+curl -X GET http://localhost:8000/health
+```
+
+#### Test Health Check with Token (Should Still Work)
+```bash
+curl -X GET http://localhost:8000/health \
+  -H "Authorization: Bearer lab05-secret-token"
+```
+
+#### Test Missing Token (Should Return 401)
+```bash
+curl -X POST http://localhost:8000/readings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "device-001",
+    "metric": "temperature",
+    "value": 25.5,
+    "unit": "celsius"
+  }'
+```
+
+Expected response: `401 Unauthorized`
+
+#### Test with Valid Token (Should Return 200/201)
+```bash
+curl -X POST http://localhost:8000/readings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer lab05-secret-token" \
+  -d '{
+    "device_id": "device-001",
+    "metric": "temperature",
+    "value": 25.5,
+    "unit": "celsius"
+  }'
+```
+
+Expected response:
+```json
+{
+  "reading_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "status": "success",
+  "ai_result": {
+    "label": "normal",
+    "confidence": 0.98
+  }
+}
+```
+
+#### Test with Invalid Token (Should Return 401)
+```bash
+curl -X POST http://localhost:8000/readings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer invalid-token" \
+  -d '{
+    "device_id": "device-001",
+    "metric": "temperature",
+    "value": 25.5,
+    "unit": "celsius"
+  }'
+```
+
+Expected response: `401 Unauthorized`
+
+### 7. View Logs
+```bash
+# All services
+docker compose logs -f
+
+# Specific service
+docker compose logs -f api
+docker compose logs -f ai-service
+docker compose logs -f db
+```
+
+### 8. Run Postman Tests
+
+#### Using Newman (CLI)
+```bash
+make test-compose
+```
+
+This will:
+- Run all tests in the Postman collection
+- Generate HTML report in `reports/newman-report.html`
+- Generate JSON report in `reports/newman-report.json`
+
+#### Using Postman Desktop App
+1. Import collection: `postman/collections/FIT4110_lab05_iot_compose.postman_collection.json`
+2. Import environment: `postman/environments/FIT4110_lab05_local.postman_environment.json`
+3. Select the imported environment
+4. Click the collection runner button
+5. Run the collection
+
+### 9. Check Readiness Checklist
+See [checklists/readiness-checklist.md](checklists/readiness-checklist.md) for verification steps.
+
+## Makefile Commands
 
 ```bash
-curl -X POST http://localhost:9000/predict
-```
-
----
-
-## 4. Chạy Newman test trên stack Compose (tuỳ chọn)
-
-```bash
-npm run test:compose
-```
-
-Report sinh tại:
-
-```text
-reports/newman-lab05-compose.xml
-reports/newman-lab05-compose.html
-```
-
----
-
-## 5. Dừng stack
-
-Khi không cần nữa, dừng và xoá các container bằng:
-
-```bash
-docker compose down
-```
-
-Nếu muốn xoá volume dữ liệu của DB, thêm tuỳ chọn `-v`:
-
-```bash
-docker compose down -v
-```
-
----
-
-## 6. Lệnh nhanh
-
-Bạn có thể dùng Makefile:
-
-```bash
+# Start services
 make compose-up
+
+# Stop services
 make compose-down
+
+# View logs
 make logs
+
+# Show running containers
+make ps
+
+# Run tests
+make test-compose
+
+# Clean up (remove containers and volumes)
+make clean
 ```
 
----
+## Network Configuration
 
-## 7. Mẹo gỡ lỗi
+All services are connected via `team-internal` network:
+- **API** (iot-api): http://localhost:8000
+- **AI Service** (iot-ai-service): http://localhost:9000
+- **Database** (iot-db): localhost:5432
 
-- Sử dụng `docker compose ps` để xem trạng thái container.
-- Nếu API trả lỗi kết nối DB, hãy kiểm tra biến môi trường `POSTGRES_*` trong `.env` và đảm bảo DB đã sẵn sàng (`pg_isready`).
-- Nếu AI service cần tải mô hình lớn, tăng `start_period` của healthcheck trong `docker-compose.yml`.
+From within Docker network:
+- API can reach AI Service at: `http://ai-service:9000`
+- Both services can reach Database at: `db:5432`
+
+## Environment Variables
+
+Key variables from `.env`:
+- `POSTGRES_USER`: Database user (default: iotuser)
+- `POSTGRES_PASSWORD`: Database password
+- `API_SECRET_TOKEN`: Bearer token for API (default: lab05-secret-token)
+- `AI_SERVICE_URL`: URL to AI service (default: http://ai-service:9000)
+
+## Troubleshooting
+
+### Service Won't Start
+```bash
+# Check logs
+docker compose logs -f <service-name>
+
+# Rebuild without cache
+docker compose up -d --build --no-cache
+
+# Reset everything
+docker compose down -v
+docker system prune -a
+docker compose up -d --build
+```
+
+### Port Already in Use
+```bash
+# Check what's using the port
+lsof -i :8000
+lsof -i :9000
+lsof -i :5432
+
+# Or kill the process
+kill -9 <PID>
+```
+
+### Database Connection Issues
+```bash
+# Check database health
+docker compose exec db pg_isready -U iotuser -d iotdb
+
+# Connect to database
+docker compose exec db psql -U iotuser -d iotdb
+```
+
+### AI Service Unreachable
+```bash
+# Check if service is running
+docker compose ps ai-service
+
+# Test connection from API
+docker compose exec api curl http://ai-service:9000/health
+```
+
+## Security Notes
+- The token `lab05-secret-token` is for **development/testing only**
+- Never commit `.env` with real credentials
+- Use environment variables for all sensitive data
+- In production, implement proper authentication (OAuth2, JWT, etc.)
+
+## Additional Resources
+- [FastAPI Documentation](https://fastapi.tiangolo.com/)
+- [Docker Compose Documentation](https://docs.docker.com/compose/)
+- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
+- [Postman Documentation](https://learning.postman.com/)

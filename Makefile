@@ -1,31 +1,55 @@
-.PHONY: install lint build run compose-up compose-down logs test-compose
+.PHONY: help compose-up compose-down logs ps test-compose clean
 
-# Install Node dependencies for Prism/Spectral/Newman
-install:
-	npm install
+help:
+	@echo "FIT4110 Lab 05: Docker Compose Commands"
+	@echo ""
+	@echo "Available commands:"
+	@echo "  make compose-up      - Build and start all services"
+	@echo "  make compose-down    - Stop and remove all services"
+	@echo "  make logs            - View logs from all services"
+	@echo "  make ps              - Show running containers"
+	@echo "  make test-compose    - Run Postman tests"
+	@echo "  make clean           - Clean up containers and volumes"
 
-# Lint OpenAPI contracts with Spectral
-lint:
-	npx spectral lint contracts/*.yaml
-
-# Build Docker image for API only
-build:
-	docker build -t fit4110/iot-ingestion:lab05 .
-
-# Run API container standalone (not via compose)
-run:
-	docker run --rm --name fit4110-api-lab05 -p 8000:8000 --env-file .env.example fit4110/iot-ingestion:lab05
-
-# Compose commands
 compose-up:
+	@echo "Building and starting Docker Compose services..."
 	docker compose up -d --build
+	@echo "Waiting for services to be healthy..."
+	@sleep 5
+	docker compose ps
 
 compose-down:
+	@echo "Stopping and removing Docker Compose services..."
 	docker compose down
 
 logs:
+	@echo "Showing logs from all services..."
 	docker compose logs -f
 
-# Run Newman tests on compose stack
+ps:
+	@echo "Running containers:"
+	docker compose ps
+
 test-compose:
-	npm run test:compose
+	@echo "Running Postman collection tests..."
+	@if [ -f "postman/collections/FIT4110_lab05_iot_compose.postman_collection.json" ]; then \
+		mkdir -p reports; \
+		docker run --rm \
+			--network host \
+			-v $(PWD)/postman:/etc/postman \
+			-v $(PWD)/reports:/reports \
+			postman/newman:latest run \
+			/etc/postman/collections/FIT4110_lab05_iot_compose.postman_collection.json \
+			-e /etc/postman/environments/FIT4110_lab05_local.postman_environment.json \
+			-r json,html \
+			--reporter-html-export /reports/newman-report.html \
+			--reporter-json-export /reports/newman-report.json; \
+		echo "Report saved to reports/newman-report.html"; \
+	else \
+		echo "Postman collection not found"; \
+	fi
+
+clean:
+	@echo "Cleaning up containers and volumes..."
+	docker compose down -v
+	@echo "Cleanup complete"

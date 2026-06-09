@@ -1,0 +1,349 @@
+{
+  "info": {
+    "name": "FIT4110 Lab 05 - IoT Compose",
+    "description": "Postman collection for Lab 05: Docker Compose Readiness",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{authToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health Checks",
+      "item": [
+        {
+          "name": "API Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has correct structure', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('status');",
+                  "    pm.expect(jsonData).to.have.property('service');",
+                  "    pm.expect(jsonData).to.have.property('version');",
+                  "    pm.expect(jsonData.status).to.equal('ok');",
+                  "    pm.expect(jsonData.service).to.equal('iot-service');",
+                  "});",
+                  "",
+                  "pm.test('Response time is less than 1000ms', function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(1000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Check API health status"
+          },
+          "response": []
+        },
+        {
+          "name": "AI Service Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has correct structure', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('status');",
+                  "    pm.expect(jsonData).to.have.property('service');",
+                  "    pm.expect(jsonData).to.have.property('model');",
+                  "    pm.expect(jsonData.status).to.equal('ok');",
+                  "    pm.expect(jsonData.service).to.equal('ai-service');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{aiServiceUrl}}/health",
+              "host": [
+                "{{aiServiceUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Check AI Service health status"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Readings",
+      "item": [
+        {
+          "name": "Create Reading - With Valid Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 or 201', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "",
+                  "pm.test('Response has required fields', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('reading_id');",
+                  "    pm.expect(jsonData).to.have.property('status');",
+                  "    pm.expect(jsonData).to.have.property('ai_result');",
+                  "    pm.expect(jsonData.status).to.equal('success');",
+                  "});",
+                  "",
+                  "pm.test('AI result has correct structure', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    const aiResult = jsonData.ai_result;",
+                  "    pm.expect(aiResult).to.have.property('label');",
+                  "    pm.expect(aiResult).to.have.property('confidence');",
+                  "    pm.expect(aiResult.confidence).to.be.a('number');",
+                  "});",
+                  "",
+                  "pm.test('Authorization header is present', function () {",
+                  "    pm.expect(pm.request.headers.get('Authorization')).to.not.be.undefined;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{authToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{deviceId}}\",\n  \"metric\": \"temperature\",\n  \"value\": 25.5,\n  \"unit\": \"celsius\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/readings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readings"
+              ]
+            },
+            "description": "Create a new reading with valid Bearer token"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Reading - Without Token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 Unauthorized', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test('Response contains error message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('detail');",
+                  "    pm.expect(jsonData.detail).to.include('Missing authorization token');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{deviceId}}\",\n  \"metric\": \"temperature\",\n  \"value\": 25.5,\n  \"unit\": \"celsius\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/readings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readings"
+              ]
+            },
+            "description": "Try to create reading without authorization token - should return 401"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Reading - Invalid Token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 Unauthorized', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test('Response contains error message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('detail');",
+                  "    pm.expect(jsonData.detail).to.include('Invalid token');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "invalid-token-12345",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{deviceId}}\",\n  \"metric\": \"temperature\",\n  \"value\": 25.5,\n  \"unit\": \"celsius\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/readings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readings"
+              ]
+            },
+            "description": "Try to create reading with invalid token - should return 401"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Reading - High Value",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 or 201', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "",
+                  "pm.test('AI prediction detects anomaly for high value', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    const aiResult = jsonData.ai_result;",
+                  "    pm.expect(aiResult).to.have.property('label');",
+                  "    pm.expect(aiResult.label).to.equal('anomaly');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{authToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{deviceId}}\",\n  \"metric\": \"temperature\",\n  \"value\": 105.5,\n  \"unit\": \"celsius\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/readings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readings"
+              ]
+            },
+            "description": "Create reading with high value to trigger anomaly detection"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
